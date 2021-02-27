@@ -1,24 +1,38 @@
 "use strict";
 
-const fs = require("fs");
 const kuromojin = require("kuromojin");
 const createMatcher = require("morpheme-match-all");
 const yaml = require("js-yaml");
 
-const path = require("path");
 const untildify = require("untildify");
 
 const defaultOptions = {
-  rulePath: __dirname + "/../dict/fukushi.yml"
+  rulePath: __dirname + "/../dict/fukushi.yml",
 };
 
-function loadDictionaries(rulePath, baseDir) {
-  if (typeof rulePath === "undefined" || rulePath ==="") {
+async function loadData(rulePath, baseDir) {
+  const isNode = process.title !== "browser";
+
+  let data;
+  if (isNode) {
+    const fs = require("fs");
+    const path = require("path");
+    const expandedRulePath = untildify(rulePath);
+    data = fs.readFileSync(path.resolve(baseDir, expandedRulePath), "utf8");
+  } else {
+    data = await fetch(rulePath);
+  }
+
+  return data;
+}
+
+async function loadDictionaries(rulePath, baseDir) {
+  if (typeof rulePath === "undefined" || rulePath === "") {
     return null;
   }
-  const expandedRulePath = untildify(rulePath);
   const dictionaries = [];
-  const data = yaml.safeLoad(fs.readFileSync(path.resolve(baseDir, expandedRulePath), "utf8"));
+
+  const data = yaml.safeLoad(await loadData(rulePath, baseDir));
 
   data.dict.forEach(function (item) {
     var form = "";
@@ -26,21 +40,24 @@ function loadDictionaries(rulePath, baseDir) {
       form += token.surface_form;
     });
     dictionaries.push({
-      message: data.message + ": \"" + form + "\" => \"" + item.expected + "\"",
+      message: data.message + ': "' + form + '" => "' + item.expected + '"',
       fix: item.expected,
-      tokens: item.tokens
+      tokens: item.tokens,
     });
   });
 
   return dictionaries;
 }
 
-function reporter(context, userOptions = {}) {
+async function reporter(context, userOptions = {}) {
   const options = Object.assign(defaultOptions, userOptions);
-  const matchAll = createMatcher(loadDictionaries(options.rulePath, getConfigBaseDir(context)));
-  const {Syntax, RuleError, report, getSource, fixer} = context;
+  const matchAll = createMatcher(
+    await loadDictionaries(options.rulePath, getConfigBaseDir(context))
+  );
+  const { Syntax, RuleError, report, getSource, fixer } = context;
   return {
-    [Syntax.Str](node){ // "Str" node
+    [Syntax.Str](node) {
+      // "Str" node
       const text = getSource(node); // Get text
       return kuromojin.tokenize(text).then((actualTokens) => {
         const results = matchAll(actualTokens);
@@ -53,31 +70,34 @@ function reporter(context, userOptions = {}) {
           const tokenIndex = result.index;
           const index = getIndexFromTokens(tokenIndex, actualTokens);
           let replaceFrom = "";
-          result.tokens.forEach(function(token){
+          result.tokens.forEach(function (token) {
             replaceFrom += token.surface_form;
           });
-          const replaceTo = fixer.replaceTextRange([index, index + replaceFrom.length], result.dict.fix);
+          const replaceTo = fixer.replaceTextRange(
+            [index, index + replaceFrom.length],
+            result.dict.fix
+          );
           const ruleError = new RuleError(result.dict.message, {
             index: index,
-            fix:   replaceTo // https://github.com/textlint/textlint/blob/master/docs/rule-fixable.md
+            fix: replaceTo, // https://github.com/textlint/textlint/blob/master/docs/rule-fixable.md
           });
           report(node, ruleError);
         });
       });
-    }
+    },
   };
 }
 
 function getIndexFromTokens(tokenIndex, actualTokens) {
   let index = 0;
-  for ( let i = 0; i < tokenIndex; i++) {
+  for (let i = 0; i < tokenIndex; i++) {
     index += actualTokens[i].surface_form.length;
   }
   return index;
 }
 
 // from https://github.com/textlint-rule/textlint-rule-prh/blob/master/src/textlint-rule-prh.js#L147
-const getConfigBaseDir = context => {
+const getConfigBaseDir = (context) => {
   if (typeof context.getConfigBaseDir === "function") {
     return context.getConfigBaseDir() || process.cwd();
   }
@@ -87,6 +107,5 @@ const getConfigBaseDir = context => {
 
 module.exports = {
   linter: reporter,
-  fixer: reporter
+  fixer: reporter,
 };
-
