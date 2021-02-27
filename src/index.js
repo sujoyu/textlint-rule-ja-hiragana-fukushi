@@ -1,5 +1,8 @@
 "use strict";
 
+import "babel-polyfill";
+import { wrapReportHandler } from "textlint-rule-helper";
+
 const kuromojin = require("kuromojin");
 const createMatcher = require("morpheme-match-all");
 const yaml = require("js-yaml");
@@ -9,6 +12,8 @@ const untildify = require("untildify");
 const defaultOptions = {
   rulePath: __dirname + "/../dict/fukushi.yml",
 };
+
+let cache = null;
 
 async function loadData(rulePath, baseDir) {
   const isNode = process.title !== "browser";
@@ -20,7 +25,8 @@ async function loadData(rulePath, baseDir) {
     const expandedRulePath = untildify(rulePath);
     data = fs.readFileSync(path.resolve(baseDir, expandedRulePath), "utf8");
   } else {
-    data = await (await fetch(rulePath)).text();
+    data = cache || (await (await fetch(rulePath)).text());
+    cache = data;
   }
 
   return data;
@@ -49,43 +55,46 @@ async function loadDictionaries(rulePath, baseDir) {
   return dictionaries;
 }
 
-async function reporter(context, userOptions = {}) {
-  const options = Object.assign(defaultOptions, userOptions);
-  const matchAll = createMatcher(
-    await loadDictionaries(options.rulePath, getConfigBaseDir(context))
-  );
-  const { Syntax, RuleError, report, getSource, fixer } = context;
-  return {
-    [Syntax.Str](node) {
-      // "Str" node
-      const text = getSource(node); // Get text
-      return kuromojin.tokenize(text).then((actualTokens) => {
-        const results = matchAll(actualTokens);
+function reporter(context, userOptions = {}) {
+  const { Syntax, RuleError, getSource, fixer } = context;
+  return wrapReportHandler(context, {}, (report) => {
+    return {
+      async [Syntax.Str](node) {
+        // "Str" node
+        const options = Object.assign(defaultOptions, userOptions);
+        const matchAll = createMatcher(
+          await loadDictionaries(options.rulePath, getConfigBaseDir(context))
+        );
+        const text = getSource(node); // Get text
+        return kuromojin.tokenize(text).then((actualTokens) => {
+          const results = matchAll(actualTokens);
+          console.log(results);
 
-        if (results.length == 0) {
-          return;
-        }
+          if (results.length == 0) {
+            return;
+          }
 
-        results.forEach(function (result) {
-          const tokenIndex = result.index;
-          const index = getIndexFromTokens(tokenIndex, actualTokens);
-          let replaceFrom = "";
-          result.tokens.forEach(function (token) {
-            replaceFrom += token.surface_form;
+          results.forEach(function (result) {
+            const tokenIndex = result.index;
+            const index = getIndexFromTokens(tokenIndex, actualTokens);
+            let replaceFrom = "";
+            result.tokens.forEach(function (token) {
+              replaceFrom += token.surface_form;
+            });
+            const replaceTo = fixer.replaceTextRange(
+              [index, index + replaceFrom.length],
+              result.dict.fix
+            );
+            const ruleError = new RuleError(result.dict.message, {
+              index: index,
+              fix: replaceTo, // https://github.com/textlint/textlint/blob/master/docs/rule-fixable.md
+            });
+            report(node, ruleError);
           });
-          const replaceTo = fixer.replaceTextRange(
-            [index, index + replaceFrom.length],
-            result.dict.fix
-          );
-          const ruleError = new RuleError(result.dict.message, {
-            index: index,
-            fix: replaceTo, // https://github.com/textlint/textlint/blob/master/docs/rule-fixable.md
-          });
-          report(node, ruleError);
         });
-      });
-    },
-  };
+      },
+    };
+  });
 }
 
 function getIndexFromTokens(tokenIndex, actualTokens) {
@@ -105,7 +114,4 @@ const getConfigBaseDir = (context) => {
   return textlintRcFilePath ? path.dirname(textlintRcFilePath) : process.cwd();
 };
 
-module.exports = {
-  linter: reporter,
-  fixer: reporter,
-};
+export default reporter;
