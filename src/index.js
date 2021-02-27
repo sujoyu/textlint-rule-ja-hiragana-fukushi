@@ -12,8 +12,6 @@ const defaultOptions = {
   rulePath: __dirname + "/../dict/fukushi.yml",
 };
 
-let cache = null;
-
 async function loadData(rulePath, baseDir) {
   const isNode = process.title !== "browser";
 
@@ -24,8 +22,7 @@ async function loadData(rulePath, baseDir) {
     const expandedRulePath = untildify(rulePath);
     data = fs.readFileSync(path.resolve(baseDir, expandedRulePath), "utf8");
   } else {
-    data = cache || (await (await fetch(rulePath)).text());
-    cache = data;
+    data = await (await fetch(rulePath)).text();
   }
 
   return data;
@@ -54,6 +51,8 @@ async function loadDictionaries(rulePath, baseDir) {
   return dictionaries;
 }
 
+let matchAllCache = null;
+
 function reporter(context, userOptions = {}) {
   const { Syntax, RuleError, getSource, fixer } = context;
   return wrapReportHandler(context, {}, (report) => {
@@ -61,9 +60,12 @@ function reporter(context, userOptions = {}) {
       async [Syntax.Str](node) {
         // "Str" node
         const options = Object.assign(defaultOptions, userOptions);
-        const matchAll = createMatcher(
-          await loadDictionaries(options.rulePath, getConfigBaseDir(context))
-        );
+        const matchAll =
+          matchAllCache ||
+          createMatcher(
+            await loadDictionaries(options.rulePath, getConfigBaseDir(context))
+          );
+        matchAllCache = matchAll;
         const text = getSource(node); // Get text
         return kuromojin.tokenize(text).then((actualTokens) => {
           const results = matchAll(actualTokens);
