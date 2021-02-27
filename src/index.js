@@ -1,6 +1,5 @@
 "use strict";
 
-import "babel-polyfill";
 import { wrapReportHandler } from "textlint-rule-helper";
 
 const kuromojin = require("kuromojin");
