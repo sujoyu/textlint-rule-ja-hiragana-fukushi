@@ -20,7 +20,7 @@ async function loadData(rulePath, baseDir) {
     const expandedRulePath = untildify(rulePath);
     data = fs.readFileSync(path.resolve(baseDir, expandedRulePath), "utf8");
   } else {
-    data = await fetch(rulePath);
+    data = await (await fetch(rulePath)).text();
   }
 
   return data;
